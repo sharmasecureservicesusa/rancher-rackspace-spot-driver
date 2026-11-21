@@ -2,7 +2,6 @@ package driver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -351,7 +350,7 @@ func (d *Driver) Update(ctx context.Context, clusterInfo *types.ClusterInfo, opt
 	}
 
 	if raw, ok := lookupStringOption(opts, flagAutopilotPools, "autopilotPools"); ok {
-		if err := json.Unmarshal([]byte(raw), &s.AutopilotPools); err != nil {
+		if err := decodePoolJSON(raw, &s.AutopilotPools); err != nil {
 			return clusterInfo, fmt.Errorf("invalid autopilot pools: %w", err)
 		}
 	}

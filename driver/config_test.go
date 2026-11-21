@@ -70,6 +70,44 @@ func TestStateFromClusterInfoReadsTokenFromPassword(t *testing.T) {
 	}
 }
 
+func TestStateFromOptionsAcceptsRancherStringCounts(t *testing.T) {
+	// kontainer-engine flatten() stores JSON strings in StringOptions. Number
+	// inputs in the cluster form emit "5" rather than 5.
+	state, err := stateFromOptions(&types.DriverOptions{
+		StringOptions: map[string]string{
+			"rackspaceSpotRefreshToken": "refresh-token",
+			"rackspaceSpotOrganization": "acme",
+			"rackspaceSpotRegion":       "us-east-iad-1",
+			"kubernetesVersion":         "1.35.9",
+			"cni":                       "calico",
+			"spotServerClass":           "gp.vs1.medium-iad",
+			"spotBidPrice":              "0.02",
+			"spotNodeCount":             "5",
+			"spotAutoscalingMinNodes":   "2",
+			"spotAutoscalingMaxNodes":   "8.0",
+			"onDemandNodeCount":         "2",
+			"additionalSpotPools":       `[{"name":"pool-b","serverClass":"gp.vs1.large-iad","nodeCount":"4","bidPrice":"0.03","autoscaling":false,"minNodes":"1","maxNodes":"6"}]`,
+			"autopilotPools":            `[{"name":"11111111-1111-4111-8111-111111111111","vcpus":"16","memoryPerVCPU":"4","budgetPerHour":"0.50","minVCPUsPerNode":"0","maxVCPUsPerNode":"8"}]`,
+		},
+		BoolOptions: map[string]bool{"onDemandEnabled": true, "spotAutoscalingEnabled": true},
+	})
+	if err != nil {
+		t.Fatalf("stateFromOptions() error = %v", err)
+	}
+	if state.SpotNodeCount != 5 || state.SpotMinNodes != 2 || state.SpotMaxNodes != 8 || state.OnDemandCount != 2 {
+		t.Fatalf("counts = spot %d min %d max %d ondemand %d", state.SpotNodeCount, state.SpotMinNodes, state.SpotMaxNodes, state.OnDemandCount)
+	}
+	if state.SpotBidPrice != "0.02" {
+		t.Fatalf("SpotBidPrice = %q", state.SpotBidPrice)
+	}
+	if len(state.AdditionalSpotPools) != 1 || state.AdditionalSpotPools[0].NodeCount != 4 || state.AdditionalSpotPools[0].BidPrice != "0.03" || state.AdditionalSpotPools[0].MaxNodes != 6 {
+		t.Fatalf("additional pools = %+v", state.AdditionalSpotPools)
+	}
+	if len(state.AutopilotPools) != 1 || state.AutopilotPools[0].VCPUs != 16 || state.AutopilotPools[0].MemoryPerVCPU != "4" || state.AutopilotPools[0].MaxVCPUsPerNode != 8 {
+		t.Fatalf("autopilot pools = %+v", state.AutopilotPools)
+	}
+}
+
 func TestMergeStateAppliesFalseAndZeroValues(t *testing.T) {
 	state := &clusterState{
 		RefreshToken:        "old-token",

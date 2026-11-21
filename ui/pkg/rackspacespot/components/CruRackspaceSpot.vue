@@ -386,7 +386,7 @@ import LabeledInput      from '@components/Form/LabeledInput/LabeledInput';
 import LabeledSelect     from '@shell/components/form/LabeledSelect';
 import Checkbox          from '@components/Form/Checkbox/Checkbox';
 
-import { validateSpotBids } from '../bids.mjs';
+import { normalizeManualSpotConfig, validateSpotBids } from '../bids.mjs';
 import { normalizeAutopilotPools, validateAutopilotPools } from '../autopilot.mjs';
 
 import catalog from '../../../../driver/catalog.json';
@@ -592,10 +592,11 @@ export default defineComponent({
       }
 
       try {
+        const normalized = normalizeManualSpotConfig(this.config, this.additionalSpotPools);
         const cfg = {
-          ...this.config,
+          ...normalized.config,
           autopilotPools: JSON.stringify(autopilotPools),
-          additionalSpotPools: JSON.stringify(this.additionalSpotPools),
+          additionalSpotPools: JSON.stringify(normalized.additionalSpotPools),
         };
 
         // An omitted token retains the credential already stored by Rancher.

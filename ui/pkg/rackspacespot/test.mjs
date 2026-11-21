@@ -2,7 +2,7 @@
 // Tests the pure-JS logic from CruRackspaceSpot.vue without a browser or framework.
 
 import assert from 'node:assert/strict';
-import { meetsMinimumBid, validateSpotBids } from './bids.mjs';
+import { meetsMinimumBid, normalizeManualSpotConfig, validateSpotBids } from './bids.mjs';
 import { readFileSync } from 'node:fs';
 import { serverClassOptions, regionOptions, versionOptions, cniOptions, defaultServerClass } from './catalog.mjs';
 const catalog = JSON.parse(readFileSync(new URL('../../../driver/catalog.json', import.meta.url)));
@@ -227,6 +227,17 @@ test('spot bid minimum accepts the boundary and rejects invalid or smaller value
   for (const bid of ['0.01', '0.010', '0.02', '1', 0.01]) assert.ok(meetsMinimumBid(bid), String(bid));
   for (const bid of ['', null, undefined, '0', '0.009', '-1', 'NaN', 'Infinity', '1e-2']) assert.equal(meetsMinimumBid(bid), false, String(bid));
 });
+test('manual spot counts accept the strings emitted by number inputs', () => {
+  const normalized = normalizeManualSpotConfig(
+    { spotNodeCount: '5', spotAutoscalingMinNodes: '1', spotAutoscalingMaxNodes: '8.0', onDemandNodeCount: '2', spotBidPrice: '0.01' },
+    [{ nodeCount: '4', minNodes: '1', maxNodes: '6', bidPrice: '0.02' }],
+  );
+  assert.equal(normalized.config.spotNodeCount, 5);
+  assert.equal(normalized.config.spotAutoscalingMaxNodes, 8);
+  assert.equal(normalized.config.onDemandNodeCount, 2);
+  assert.equal(normalized.config.spotBidPrice, '0.01');
+  assert.deepEqual(normalized.additionalSpotPools, [{ nodeCount: 4, minNodes: 1, maxNodes: 6, bidPrice: '0.02' }]);
+});
 test('primary and additional spot pools enforce the minimum on save', () => {
   assert.match(validateSpotBids({ spotBidPrice: '0.009' }, []), /Primary/);
   assert.match(validateSpotBids({ spotBidPrice: '0.01' }, [{ bidPrice: '0.009' }]), /pool 2/);
@@ -245,8 +256,8 @@ const formScript = readFileSync(new URL('./components/CruRackspaceSpot.vue', imp
   .replace(/^import .*;$/gm, '')
   .replace('export default defineComponent(', 'return (');
 const form = new Function('catalog', 'CruResource', 'Banner', 'LabeledInput', 'LabeledSelect', 'Checkbox',
-  'normalizeAutopilotPools', 'validateSpotBids', 'validateAutopilotPools', formScript)(
-  catalog, {}, {}, {}, {}, {}, normalizeAutopilotPools, validateSpotBids, validateAutopilotPools);
+  'normalizeAutopilotPools', 'normalizeManualSpotConfig', 'validateSpotBids', 'validateAutopilotPools', formScript)(
+  catalog, {}, {}, {}, {}, {}, normalizeAutopilotPools, normalizeManualSpotConfig, validateSpotBids, validateAutopilotPools);
 
 test('edit validation allows stored credentials while creation requires a token', () => {
   const context = { clusterName: 'cluster', config: { rackspaceSpotOrganization: 'org' }, mode: 'edit' };
@@ -277,6 +288,30 @@ for (const token of [undefined, '', 'replacement-token']) {
     if (token) assert.equal(existing.rackspacespotEngineConfig.rackspaceSpotRefreshToken, token);
   });
 }
+
+test('create payload keeps number-input counts as integers', async () => {
+  let created;
+  const context = {
+    mode: 'create', value: {},
+    clusterName: 'my-cluster',
+    config: {
+      rackspaceSpotOrganization: 'acme', rackspaceSpotRefreshToken: 'tok',
+      spotNodeCount: '5', spotAutoscalingMinNodes: '1', spotAutoscalingMaxNodes: '9',
+      onDemandNodeCount: '2', spotBidPrice: '0.01', disablePrimarySpotPool: false,
+    },
+    autopilotPools: [], additionalSpotPools: [{ nodeCount: '4', minNodes: '0', maxNodes: '4', bidPrice: '0.02' }],
+    autoscalingPoolCount: 0,
+    $store: { async dispatch(_action, payload) { created = payload; return { async save() {} }; } },
+    $router: { push() {} },
+  };
+  await form.methods.save.call(context);
+  assert.deepEqual(context.errors, []);
+  const cfg = created.rackspacespotEngineConfig;
+  assert.equal(cfg.spotNodeCount, 5);
+  assert.equal(cfg.spotAutoscalingMaxNodes, 9);
+  assert.equal(cfg.onDemandNodeCount, 2);
+  assert.deepEqual(JSON.parse(cfg.additionalSpotPools), [{ nodeCount: 4, minNodes: 0, maxNodes: 4, bidPrice: '0.02' }]);
+});
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

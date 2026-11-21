@@ -3,6 +3,7 @@ package driver
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
@@ -137,13 +138,13 @@ func stateFromOptions(opts *types.DriverOptions) (*clusterState, error) {
 	}
 
 	if raw := getStringOption(opts, flagAdditionalSpotPools, "additionalSpotPools"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &s.AdditionalSpotPools); err != nil {
+		if err := decodePoolJSON(raw, &s.AdditionalSpotPools); err != nil {
 			return nil, fmt.Errorf("failed to parse additional spot pools: %w", err)
 		}
 	}
 
 	if raw := getStringOption(opts, flagAutopilotPools, "autopilotPools"); raw != "" {
-		if err := json.Unmarshal([]byte(raw), &s.AutopilotPools); err != nil {
+		if err := decodePoolJSON(raw, &s.AutopilotPools); err != nil {
 			return nil, fmt.Errorf("invalid autopilot pools: %w", err)
 		}
 	}
@@ -370,7 +371,7 @@ func mergeState(existing *clusterState, opts *types.DriverOptions) {
 
 	if raw := getStringOption(opts, flagAdditionalSpotPools, "additionalSpotPools"); raw != "" {
 		var pools []SpotPoolConfig
-		if err := json.Unmarshal([]byte(raw), &pools); err != nil {
+		if err := decodePoolJSON(raw, &pools); err != nil {
 			logrus.Warnf("ignoring invalid additionalSpotPools JSON: %v", err)
 		} else {
 			existing.AdditionalSpotPools = pools
@@ -426,7 +427,89 @@ func lookupIntOption(opts *types.DriverOptions, keys ...string) (int64, bool) {
 			return value, true
 		}
 	}
+	// Rancher flatten() keeps JSON strings in StringOptions. The cluster form's
+	// number inputs emit strings, so counts such as "5" never arrive as ints.
+	for _, key := range keys {
+		raw, ok := opts.StringOptions[key]
+		if !ok {
+			continue
+		}
+		if n, ok := wholeNumber(raw); ok {
+			return n, true
+		}
+	}
 	return 0, false
+}
+
+// Integer fields the form may stringify inside pool JSON. Bid prices and
+// memoryPerVCPU stay strings because "0.01" and "4" are not counts.
+var poolIntFields = map[string]bool{
+	"nodeCount":       true,
+	"minNodes":        true,
+	"maxNodes":        true,
+	"vcpus":           true,
+	"minVCPUsPerNode": true,
+	"maxVCPUsPerNode": true,
+}
+
+func decodePoolJSON(raw string, dest any) error {
+	var parsed any
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return err
+	}
+	coercePoolInts(parsed)
+	normalized, err := json.Marshal(parsed)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(normalized, dest)
+}
+
+func coercePoolInts(v any) {
+	switch typed := v.(type) {
+	case map[string]any:
+		for key, value := range typed {
+			if poolIntFields[key] {
+				if n, ok := wholeNumberValue(value); ok {
+					typed[key] = n
+					continue
+				}
+			}
+			coercePoolInts(value)
+		}
+	case []any:
+		for _, item := range typed {
+			coercePoolInts(item)
+		}
+	}
+}
+
+func wholeNumberValue(value any) (int64, bool) {
+	switch n := value.(type) {
+	case float64:
+		return wholeNumber(strconv.FormatFloat(n, 'f', -1, 64))
+	case string:
+		return wholeNumber(n)
+	case json.Number:
+		return wholeNumber(n.String())
+	default:
+		return 0, false
+	}
+}
+
+func wholeNumber(raw string) (int64, bool) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false
+	}
+	if n, err := strconv.ParseInt(raw, 10, 64); err == nil {
+		return n, true
+	}
+	f, err := strconv.ParseFloat(raw, 64)
+	if err != nil || f != float64(int64(f)) {
+		return 0, false
+	}
+	return int64(f), true
 }
 
 // normalizeBidPrice strips the leading "$" that the Spot SDK adds when reading
